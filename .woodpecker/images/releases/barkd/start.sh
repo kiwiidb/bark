@@ -22,9 +22,9 @@ if [ ! -d "${BARKD_DATADIR}/.bark" ]; then
   echo "  esplora: ${BARK_ESPLORA}"
 
   if [ "${BARK_NETWORK}" = "mainnet" ]; then
-    /usr/local/bin/bark create --ark "${BARK_ARK}" --esplora "${BARK_ESPLORA}"
+    /usr/local/bin/bark create --datadir "${BARKD_DATADIR}" --ark "${BARK_ARK}" --esplora "${BARK_ESPLORA}"
   else
-    /usr/local/bin/bark create --${BARK_NETWORK} --ark "${BARK_ARK}" --esplora "${BARK_ESPLORA}"
+    /usr/local/bin/bark create --datadir "${BARKD_DATADIR}" --${BARK_NETWORK} --ark "${BARK_ARK}" --esplora "${BARK_ESPLORA}"
   fi
 fi
 
