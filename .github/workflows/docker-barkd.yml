@@ -1,0 +1,34 @@
+name: Build and Push barkd Docker Image
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    env:
+      REGISTRY: ghcr.io
+      IMAGENAME: barkd
+      TAG: ${{ github.ref_name }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        name: Check out code
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build barkd binary
+        run: |
+          cargo build --release --bin barkd
+          cp target/release/barkd ./barkd-linux-x86_64
+      - name: Docker build and push
+        if: github.actor != 'dependabot[bot]'
+        uses: mr-smithers-excellent/docker-build-push@v6
+        with:
+          image: ${{ env.IMAGENAME }}
+          registry: ${{ env.REGISTRY }}
+          multiPlatform: true
+          platform: linux/amd64,linux/arm64
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          dockerfile: .woodpecker/images/releases/barkd/Dockerfile
