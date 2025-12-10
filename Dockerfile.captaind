@@ -1,0 +1,21 @@
+FROM --platform=linux/amd64 debian:bookworm-slim
+
+# Install runtime dependencies only
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
+        libpq-dev \
+        ca-certificates \
+        && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Copy the captaind binary
+COPY ./captaind-linux-x86_64 /usr/local/bin/captaind
+
+# Make binary executable
+RUN chmod a+x /usr/local/bin/captaind
+
+# Expose RPC port
+EXPOSE 3535
+
+# Default command is to start the server, can be overridden with "create"
+CMD ["captaind", "start"]
