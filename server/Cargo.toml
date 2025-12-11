@@ -33,6 +33,8 @@ log.workspace = true
 
 # INTERNAL
 tokio-postgres.workspace = true
+native-tls.workspace = true
+postgres-native-tls.workspace = true
 bb8.workspace = true
 bb8-postgres.workspace = true
 postgres-types.workspace = true

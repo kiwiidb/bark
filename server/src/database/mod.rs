@@ -33,8 +33,9 @@ use bitcoin::consensus::{serialize, deserialize};
 use bitcoin::secp256k1::{self, PublicKey};
 use chrono::Local;
 use futures::{Stream, TryStreamExt};
-use tokio_postgres::{Client, NoTls, RowStream};
+use tokio_postgres::{Client, RowStream};
 use tokio_postgres::types::Type;
+use postgres_native_tls::MakeTlsConnector;
 use log::{info, warn};
 
 use ark::{Vtxo, VtxoId, VtxoRequest};
@@ -56,10 +57,19 @@ const DEFAULT_DATABASE: &str = "postgres";
 
 #[derive(Clone)]
 pub struct Db {
-	pool: Pool<PostgresConnectionManager<NoTls>>
+	pool: Pool<PostgresConnectionManager<MakeTlsConnector>>
 }
 
 impl Db {
+	fn make_tls_connector() -> anyhow::Result<MakeTlsConnector> {
+		// Configure TLS to work with both TLS-enabled and local non-TLS servers
+		// This uses "prefer" mode which will try TLS but fall back to plain if unavailable
+		let tls_connector = native_tls::TlsConnector::builder()
+			.danger_accept_invalid_certs(false)
+			.build()
+			.context("failed to build TLS connector")?;
+		Ok(MakeTlsConnector::new(tls_connector))
+	}
 	async fn run_migrations(&self) -> anyhow::Result<()> {
 		let mut conn = self.get_conn().await?;
 		embedded::migrations::runner().run_async::<Client>(&mut conn).await?;
@@ -78,13 +88,16 @@ impl Db {
 		if let Some(password) = &config.password {
 			pg_config.password(password.leak_ref());
 		}
+		// Use prefer mode: try TLS, fall back to plain if server doesn't support it
+		pg_config.ssl_mode(tokio_postgres::config::SslMode::Prefer);
 
 		pg_config
 	}
 
 	async fn raw_connect(postgres_config: &PostgresConfig) -> anyhow::Result<Client> {
 		let config = Self::config(&postgres_config.name, postgres_config);
-		let (client, connection) = config.connect(NoTls).await?;
+		let tls = Self::make_tls_connector()?;
+		let (client, connection) = config.connect(tls).await?;
 
 		tokio::spawn(async move {
 			if let Err(e) = connection.await {
@@ -98,10 +111,11 @@ impl Db {
 	async fn pool_connect(
 		database: &str,
 		postgres_config: &PostgresConfig,
-	) -> anyhow::Result<Pool<PostgresConnectionManager<NoTls>>> {
+	) -> anyhow::Result<Pool<PostgresConnectionManager<MakeTlsConnector>>> {
 		let config = Self::config(database, postgres_config);
+		let tls = Self::make_tls_connector()?;
 
-		let manager = PostgresConnectionManager::new(config, NoTls);
+		let manager = PostgresConnectionManager::new(config, tls);
 		Ok(Pool::builder()
 			.max_size(postgres_config.max_connections)
 			.error_sink(Box::new(PoolErrorSink))
@@ -152,7 +166,7 @@ impl Db {
 		Self::connect(config).await
 	}
 
-	pub async fn get_conn(&self) -> anyhow::Result<PooledConnection<'_, PostgresConnectionManager<NoTls>>> {
+	pub async fn get_conn(&self) -> anyhow::Result<PooledConnection<'_, PostgresConnectionManager<MakeTlsConnector>>> {
 		telemetry::set_postgres_connection_pool_metrics(self.pool.state());
 		match self.pool.get().await {
 			Ok(conn) => {
