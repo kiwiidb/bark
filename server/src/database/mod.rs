@@ -64,6 +64,7 @@ impl Db {
 	fn make_tls_connector() -> anyhow::Result<MakeTlsConnector> {
 		// Configure TLS to work with both TLS-enabled and local non-TLS servers
 		// This uses "prefer" mode which will try TLS but fall back to plain if unavailable
+		info!("Configuring TLS connector (mode: prefer - will use TLS if available, fall back to plain if not)");
 		let tls_connector = native_tls::TlsConnector::builder()
 			.danger_accept_invalid_certs(false)
 			.build()
@@ -95,9 +96,17 @@ impl Db {
 	}
 
 	async fn raw_connect(postgres_config: &PostgresConfig) -> anyhow::Result<Client> {
+		info!("Attempting to connect to PostgreSQL at {}:{} (database: {})",
+			postgres_config.host, postgres_config.port, postgres_config.name);
+
 		let config = Self::config(&postgres_config.name, postgres_config);
 		let tls = Self::make_tls_connector()?;
-		let (client, connection) = config.connect(tls).await?;
+
+		let (client, connection) = config.connect(tls).await
+			.with_context(|| format!(
+				"Failed to connect to PostgreSQL at {}:{} (database: {})",
+				postgres_config.host, postgres_config.port, postgres_config.name
+			))?;
 
 		tokio::spawn(async move {
 			if let Err(e) = connection.await {
@@ -105,6 +114,7 @@ impl Db {
 			}
 		});
 
+		info!("Successfully connected to PostgreSQL database '{}'", postgres_config.name);
 		Ok(client)
 	}
 
@@ -112,14 +122,24 @@ impl Db {
 		database: &str,
 		postgres_config: &PostgresConfig,
 	) -> anyhow::Result<Pool<PostgresConnectionManager<MakeTlsConnector>>> {
+		info!("Creating connection pool to PostgreSQL at {}:{} (database: {})",
+			postgres_config.host, postgres_config.port, database);
+
 		let config = Self::config(database, postgres_config);
 		let tls = Self::make_tls_connector()?;
 
 		let manager = PostgresConnectionManager::new(config, tls);
-		Ok(Pool::builder()
+		let pool = Pool::builder()
 			.max_size(postgres_config.max_connections)
 			.error_sink(Box::new(PoolErrorSink))
-			.build(manager).await?)
+			.build(manager).await
+			.with_context(|| format!(
+				"Failed to create connection pool to PostgreSQL at {}:{} (database: {})",
+				postgres_config.host, postgres_config.port, database
+			))?;
+
+		info!("Successfully created connection pool (max_size: {})", postgres_config.max_connections);
+		Ok(pool)
 	}
 
 	async fn check_database_emptiness(conn: &Client) -> anyhow::Result<()> {
@@ -146,23 +166,31 @@ impl Db {
 	}
 
 	pub async fn create(config: &PostgresConfig) -> anyhow::Result<Self> {
-		info!("Checking if a database exists...");
+		info!("Checking if database '{}' exists at {}:{}",
+			config.name, config.host, config.port);
 		let connect = Self::raw_connect(config).await;
 
 		if let Ok(conn) = connect {
-			info!("A database already exists for the server, checking if it is empty.");
+			info!("Database '{}' already exists, checking if it is empty.", config.name);
 			Self::check_database_emptiness(&conn).await?;
 		} else {
-			info!("No database set up yet, creating a new one.");
-			let pool = Self::pool_connect(DEFAULT_DATABASE, config).await?;
-			let conn= pool.get().await?;
+			info!("Database '{}' does not exist, will create it.", config.name);
+			let pool = Self::pool_connect(DEFAULT_DATABASE, config).await
+				.context("Failed to connect to default 'postgres' database to create new database")?;
 
+			info!("Getting connection from pool to create database...");
+			let conn = pool.get().await
+				.context("Failed to get connection from pool")?;
+
+			info!("Creating database '{}'...", config.name);
 			let statement = conn.prepare(
 				&format!("CREATE DATABASE \"{}\"", config.name)
 			).await?;
 			conn.execute(&statement, &[]).await?;
+			info!("Successfully created database '{}'", config.name);
 		}
 
+		info!("Connecting to database '{}'...", config.name);
 		Self::connect(config).await
 	}
 
