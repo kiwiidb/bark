@@ -97,16 +97,26 @@ impl Db {
 		};
 		pg_config.ssl_mode(ssl_mode);
 
+		// Set connection timeout to 10 seconds to get faster feedback
+		pg_config.connect_timeout(Duration::from_secs(10));
+
 		pg_config
 	}
 
 	async fn raw_connect(postgres_config: &PostgresConfig) -> anyhow::Result<Client> {
-		info!("Attempting to connect to PostgreSQL at {}:{} (database: {})",
-			postgres_config.host, postgres_config.port, postgres_config.name);
+		info!("Attempting to connect to PostgreSQL at {}:{} (database: {}, ssl_mode: {})",
+			postgres_config.host, postgres_config.port, postgres_config.name,
+			if postgres_config.host == "localhost" || postgres_config.host == "127.0.0.1" {
+				"Prefer"
+			} else {
+				"Require"
+			}
+		);
 
 		let config = Self::config(&postgres_config.name, postgres_config);
 		let tls = Self::make_tls_connector()?;
 
+		info!("TLS connector created, attempting connection...");
 		let (client, connection) = config.connect(tls).await
 			.with_context(|| format!(
 				"Failed to connect to PostgreSQL at {}:{} (database: {})",
@@ -115,7 +125,7 @@ impl Db {
 
 		tokio::spawn(async move {
 			if let Err(e) = connection.await {
-				panic!("postgres daemon connection error: {}", e);
+				warn!("postgres daemon connection error: {}", e);
 			}
 		});
 
@@ -808,6 +818,12 @@ struct PoolErrorSink;
 
 impl bb8::ErrorSink<tokio_postgres::Error> for PoolErrorSink {
 	fn sink(&self, error: tokio_postgres::Error) {
+		use std::error::Error;
+		warn!("PostgreSQL connection pool error: {} (code: {:?}, source: {:?})",
+			error,
+			error.code().map(|c| c.code()),
+			error.source()
+		);
 		slog!(PostgresPoolError, err: error.to_string(),
 			code: error.code().map(|c| c.code().to_owned()),
 		);
