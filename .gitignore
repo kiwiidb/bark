@@ -18,3 +18,6 @@ testing/tmp-pg-data
 
 # macOS
 .DS_Store
+
+# Environment-specific config files with credentials
+server/captaind.playground.toml

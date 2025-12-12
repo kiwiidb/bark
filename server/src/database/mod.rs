@@ -64,9 +64,14 @@ impl Db {
 	fn make_tls_connector() -> anyhow::Result<MakeTlsConnector> {
 		// Configure TLS - required for remote connections, preferred for localhost
 		info!("Configuring TLS connector (remote connections require TLS, localhost connections prefer TLS)");
+
 		let tls_connector = native_tls::TlsConnector::builder()
-			// Accept invalid certificates for now - DigitalOcean certs not in system trust store
-			// TODO: Properly configure CA certificates for production
+			// DigitalOcean PostgreSQL uses CN=db-postgresql-ams3-98316-2 but hostname is
+			// db-postgresql-ams3-98316-do-user-7249643-0.i.db.ondigitalocean.com
+			// So we need to disable hostname verification for managed databases
+			.danger_accept_invalid_hostnames(true)
+			// Accept invalid certs for local development. In Docker, the DO CA cert
+			// is installed in the system trust store via Dockerfile
 			.danger_accept_invalid_certs(true)
 			.build()
 			.context("failed to build TLS connector")?;
