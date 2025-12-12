@@ -62,11 +62,12 @@ pub struct Db {
 
 impl Db {
 	fn make_tls_connector() -> anyhow::Result<MakeTlsConnector> {
-		// Configure TLS to work with both TLS-enabled and local non-TLS servers
-		// This uses "prefer" mode which will try TLS but fall back to plain if unavailable
-		info!("Configuring TLS connector (mode: prefer - will use TLS if available, fall back to plain if not)");
+		// Configure TLS - required for remote connections, preferred for localhost
+		info!("Configuring TLS connector (remote connections require TLS, localhost connections prefer TLS)");
 		let tls_connector = native_tls::TlsConnector::builder()
-			.danger_accept_invalid_certs(false)
+			// Accept invalid certificates for now - DigitalOcean certs not in system trust store
+			// TODO: Properly configure CA certificates for production
+			.danger_accept_invalid_certs(true)
 			.build()
 			.context("failed to build TLS connector")?;
 		Ok(MakeTlsConnector::new(tls_connector))
