@@ -89,8 +89,13 @@ impl Db {
 		if let Some(password) = &config.password {
 			pg_config.password(password.leak_ref());
 		}
-		// Use prefer mode: try TLS, fall back to plain if server doesn't support it
-		pg_config.ssl_mode(tokio_postgres::config::SslMode::Prefer);
+		// Use require mode for remote hosts, prefer for localhost
+		let ssl_mode = if config.host == "localhost" || config.host == "127.0.0.1" {
+			tokio_postgres::config::SslMode::Prefer
+		} else {
+			tokio_postgres::config::SslMode::Require
+		};
+		pg_config.ssl_mode(ssl_mode);
 
 		pg_config
 	}
@@ -174,20 +179,34 @@ impl Db {
 			info!("Database '{}' already exists, checking if it is empty.", config.name);
 			Self::check_database_emptiness(&conn).await?;
 		} else {
-			info!("Database '{}' does not exist, will create it.", config.name);
-			let pool = Self::pool_connect(DEFAULT_DATABASE, config).await
-				.context("Failed to connect to default 'postgres' database to create new database")?;
+			warn!("Cannot connect to database '{}'. This might mean:", config.name);
+			warn!("  1. The database does not exist and needs to be created");
+			warn!("  2. The user lacks permissions to connect");
+			warn!("Attempting to create the database by connecting to '{}'...", DEFAULT_DATABASE);
 
-			info!("Getting connection from pool to create database...");
-			let conn = pool.get().await
-				.context("Failed to get connection from pool")?;
+			match Self::pool_connect(DEFAULT_DATABASE, config).await {
+				Ok(pool) => {
+					info!("Successfully connected to '{}' database", DEFAULT_DATABASE);
+					info!("Getting connection from pool to create database...");
+					let conn = pool.get().await
+						.context("Failed to get connection from pool")?;
 
-			info!("Creating database '{}'...", config.name);
-			let statement = conn.prepare(
-				&format!("CREATE DATABASE \"{}\"", config.name)
-			).await?;
-			conn.execute(&statement, &[]).await?;
-			info!("Successfully created database '{}'", config.name);
+					info!("Creating database '{}'...", config.name);
+					let statement = conn.prepare(
+						&format!("CREATE DATABASE \"{}\"", config.name)
+					).await?;
+					conn.execute(&statement, &[]).await?;
+					info!("Successfully created database '{}'", config.name);
+				},
+				Err(e) => {
+					warn!("Failed to connect to '{}' database: {}", DEFAULT_DATABASE, e);
+					warn!("Cannot create database '{}'. Please ensure:", config.name);
+					warn!("  1. The database already exists");
+					warn!("  2. The user has permissions to connect to it");
+					bail!("Cannot connect to or create database '{}'. \
+						   Please create the database manually or grant appropriate permissions.", config.name);
+				}
+			}
 		}
 
 		info!("Connecting to database '{}'...", config.name);
